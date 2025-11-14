@@ -3,7 +3,7 @@
 #include <vector>
 #include <iostream>
 #include <cstdlib>
-typedef half type_t;
+
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -13,6 +13,47 @@ typedef half type_t;
             std::exit(EXIT_FAILURE); \
         } \
     } while(0)
+
+template<typename T>
+struct TypeTraits{
+    using host_type = T;
+    static T from_float(float val) {
+        return static_cast<T>(val);
+    }
+    static float to_float(T val) {
+        return static_cast<float>(val);
+    }
+};
+template<>
+struct TypeTraits<half>{
+    using host_type = float;
+    static half from_float(float val) {
+        return __float2half(val);
+    }
+    static float to_float(half val) {
+        return __half2float(val);
+    }
+};
+template<>
+struct TypeTraits<float2>{
+    using host_type = float2;
+    static float2 from_float(float val) {
+        return make_float2(val, val);
+    }
+    static float to_float(float2 val) {
+        return (val.x + val.y) / 2.0f;
+    }
+};
+template<>
+struct TypeTraits<float4>{
+    using host_type = float4;
+    static float4 from_float(float val) {
+        return make_float4(val, val, val, val);
+    }
+    static float to_float(float4 val) {
+        return (val.x + val.y + val.z + val.w) / 4.0f;
+    }
+};
 
 // 模板特化的加法操作
 template<typename T>
@@ -50,14 +91,14 @@ void vector_add(T* d_c, const T* d_a, const T* d_b, size_t n,
     add_kernel<<<grid_dim, block_dim>>>(d_c, d_a, d_b, n);
     CUDA_CHECK(cudaGetLastError());
 }
-
+using type_t = float2;
 int main() {
     constexpr size_t SIZE = 1 << 20;
-    constexpr size_t SIZE_BYTES = SIZE * sizeof(float);
+    constexpr size_t SIZE_BYTES = SIZE * sizeof(type_t);
     
     // Host 数据初始化
-    std::vector<type_t> h_a(SIZE, __float2half(1.2f));
-    std::vector<type_t> h_b(SIZE, __float2half(2.0f));
+    std::vector<type_t> h_a(SIZE, TypeTraits<type_t>::from_float(1.2f));
+    std::vector<type_t> h_b(SIZE, TypeTraits<type_t>::from_float(2.2f));
     std::vector<type_t> h_c(SIZE);
 
     // 分配 device 内存
@@ -80,11 +121,11 @@ int main() {
     // 验证结果 (只打印前 10 个和最后 10 个)
     std::cout << "First 10 results: ";
     for (size_t i = 0; i < 10; ++i) {
-        std::cout << __half2float(h_c[i]) << " ";
+        std::cout << TypeTraits<type_t>::to_float(h_c[i]) << " ";
     }
     std::cout << "\nLast 10 results: ";
     for (size_t i = SIZE - 10; i < SIZE; ++i) {
-        std::cout << __half2float(h_c[i]) << " ";
+        std::cout << TypeTraits<type_t>::to_float(h_c[i]) << " ";
     }
     std::cout << std::endl;
 
