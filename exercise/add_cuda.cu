@@ -1,20 +1,41 @@
 #include<cuda_runtime.h>
+#include<cuda_fp16.h>
 #include<vector>
 #include<iostream>
 const size_t SIZE = 1 << 20;
-size_t size_bytes = SIZE * sizeof(float);
-
+size_t size_bytes = SIZE * sizeof(half);
 
 dim3 block_dim(256);
 dim3 grid_dim((SIZE + block_dim.x-1)/block_dim.x);
 
 template<typename T>
-__global__ void add_kernel(T *c, T *a, T *b, int n){
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if(idx < n){
-        c[idx] = a[idx] + b[idx];
+__device__ T add(const T const &a, const T &b){
+    if constexpr (std::is_same_v<T,half>){
+        return __hadd(a,b);
+    }
+    else if constexpr(std::is_sane_v<T,float2>){
+        return make_float2(a.x + b.x, a.y + b.y);
+    }
+    else if constexpr(std::is_same_v<T,float4>){
+        return make_float4(a.x+b.x, a.y+b.y, a.z+b.z, a.w+b.w);
+    }else{
+        return a + b;
     }
 }
+
+template<typename T>
+__global__ void add_kernel(T *c, T *a, T *b, int n, size_t step){
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    for(size_t i = idx ; i < n ; i += step)
+        c[i] = add(a[i], b[i]);
+}
+
+template <typename T>
+void vector_add(T* c, const T* a, const T* b,size_t n, const dim3& grid , const dim3& block){
+    size_t step = grid.x * block.x;
+    add_kernel<T><<<grid,block>>>(c,a,b,n,step);
+}
+
 int main() {
     // 数据初始化
     std::vector<float> h_a(SIZE,1);
@@ -22,7 +43,7 @@ int main() {
     std::vector<float> h_c(SIZE,0);
 
     // 分配device端memory
-    float *d_a, *d_b, *d_c;
+    half *d_a, *d_b, *d_c;
     cudaMalloc(&d_a, size_bytes);
     cudaMalloc(&d_b, size_bytes);
     cudaMalloc(&d_c, size_bytes);
@@ -32,7 +53,7 @@ int main() {
     cudaMemcpy(d_b, h_b.data(), size_bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_c, h_c.data(), size_bytes, cudaMemcpyHostToDevice);
 
-    add_kernel<<<grid_dim,block_dim>>>(d_c, d_a, d_b, SIZE);
+    vector_add<half>(d_c, d_a, d_b, SIZE, grid_dim, block_dim);
 
     cudaMemcpy(h_c.data(),d_c,size_bytes,cudaMemcpyDeviceToHost);
     for(auto i : h_c) std::cout<<i<<' ';
