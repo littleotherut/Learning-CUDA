@@ -12,6 +12,7 @@
         } \
     } while(0)
 
+// 最基础；原子加法
 template <typename T>
 __global__ void atomic_sum_kernel(T* result, const T* input, size_t n){
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -20,6 +21,7 @@ __global__ void atomic_sum_kernel(T* result, const T* input, size_t n){
         // * result += input[idx];
     }
 }
+// 对warp进行规约（未使用共享内存或shf
 template <typename T>
 __global__ void reduce_warp_sum_kernel_old(T *result, const T *input, size_t n){
     
@@ -38,6 +40,7 @@ __global__ void reduce_warp_sum_kernel_old(T *result, const T *input, size_t n){
     }
 }
 
+// 采用shfl，减少空闲，寄存器操作高效
 template<typename T>
 __device__ T warp_reduce(T val){
     #pragma unroll
@@ -46,7 +49,6 @@ __device__ T warp_reduce(T val){
     }
     return val;
 }
-
 template<typename T>
 __global__ void reduce_warp_sum_kernel(T *result, const T *input, size_t n){
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -59,12 +61,58 @@ __global__ void reduce_warp_sum_kernel(T *result, const T *input, size_t n){
         atomicAdd(result,sum);
 }
 
+// 采用共享内存，原子操作个数压缩到block个数。
+template<typename T>
+__global__ void reduce_smem_sum_kernel(T *result, const T *input, size_t n){
+    extern __shared__ T smem[];
+    size_t tid = threadIdx.x;
+    size_t idx = blockIdx.x * blockDim.x + tid;
+    smem[tid] = idx < n ? input[idx] : 0;
+    __syncthreads();
+
+    for(size_t i = blockDim.x / 2 ; i > 0 ; i >>=1 ){
+        if(tid < i) smem[tid] += smem[tid+i];
+        __syncthreads();
+    }
+
+    if(tid == 0) atomicAdd(result,smem[0]);
+}
+
+template<typename T>
+__global__ void reduce_smem_warp_sum_kernel(T *result, const T *input, size_t n){
+    extern __shared__ T smem[];
+    size_t tid = threadIdx.x;
+    size_t idx = blockIdx.x * blockDim.x + tid;
+    T sum = 0;
+    for(size_t i = idx ; i < n ; i += blockDim.x * gridDim.x){
+        sum += input[i];
+    }
+    sum = warp_reduce(sum);
+
+    int lane = tid % warpSize;
+    int warp_id = tid / warpSize;
+
+    if(lane == 0){
+        smem[warp_id] = sum;
+    }
+    __syncthreads();
+    
+    if(tid < warpSize){
+        int num = (blockDim.x + warpSize - 1)/ warpSize ;
+        T block_sum = (tid < num) ? smem[tid] : 0;
+        block_sum = warp_reduce(block_sum);
+        if(tid==0) atomicAdd(result,block_sum);
+    }
+}
 
 template<typename T>
 void sum(T *result, const T *input, size_t n, dim3 block_dim = (256)){
     dim3 grid_dim = (n + block_dim.x - 1 ) / block_dim.x;
+    // 计算共享内存大小：每个 warp 需要一个 T 大小的空间
+    int num_warps = (block_dim.x + 32 - 1) / 32;
+    size_t smem_size = num_warps * sizeof(T);
     // atomic_sum_kernel<<<grid_dim, block_dim>>>(result,input,n);
-    reduce_warp_sum_kernel<<<grid_dim, block_dim>>>(result,input,n);
+    reduce_smem_warp_sum_kernel<<<grid_dim, block_dim, smem_size>>>(result,input,n);
     CUDA_CHECK(cudaGetLastError());
 }
 
