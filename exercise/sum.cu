@@ -37,9 +37,26 @@ __global__ void reduce_warp_sum_kernel_old(T *result, const T *input, size_t n){
         atomicAdd(result,warp_sum);
     }
 }
+
 template<typename T>
-__global__ void reduce_warp_reduce_kernel(T *result, const T *input, size_t n){
-    
+__device__ T warp_reduce(T val){
+    #pragma unroll
+    for(size_t i = warpSize/2; i > 0 ; i>>=1){
+        val += __shfl_down_sync(0xffffffff,val,i);
+    }
+    return val;
+}
+
+template<typename T>
+__global__ void reduce_warp_sum_kernel(T *result, const T *input, size_t n){
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    T sum = 0;
+    for(size_t i = idx ; i < n ; i += blockDim.x * gridDim.x){
+        sum += input[i];
+    }
+    sum = warp_reduce(sum);
+    if(threadIdx.x % warpSize==0)
+        atomicAdd(result,sum);
 }
 
 
@@ -47,7 +64,7 @@ template<typename T>
 void sum(T *result, const T *input, size_t n, dim3 block_dim = (256)){
     dim3 grid_dim = (n + block_dim.x - 1 ) / block_dim.x;
     // atomic_sum_kernel<<<grid_dim, block_dim>>>(result,input,n);
-    reduce_warp_sum_kernel_old<<<grid_dim, block_dim>>>(result,input,n);
+    reduce_warp_sum_kernel<<<grid_dim, block_dim>>>(result,input,n);
     CUDA_CHECK(cudaGetLastError());
 }
 
