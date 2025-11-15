@@ -20,11 +20,34 @@ __global__ void atomic_sum_kernel(T* result, const T* input, size_t n){
         // * result += input[idx];
     }
 }
+template <typename T>
+__global__ void reduce_warp_sum_kernel_old(T *result, const T *input, size_t n){
+    
+    const int warp_size = warpSize;
+    size_t lane = threadIdx.x % warp_size;
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (lane == 0){
+        T warp_sum = 0;
+        for(size_t i = 0 ; i < warp_size ; ++ i){
+            for(size_t idx_t = idx + i ; idx_t < n ; idx_t += gridDim.x * blockDim.x){
+                warp_sum += input[idx_t];
+            }
+        }
+        atomicAdd(result,warp_sum);
+    }
+}
+template<typename T>
+__global__ void reduce_warp_reduce_kernel(T *result, const T *input, size_t n){
+    
+}
+
 
 template<typename T>
 void sum(T *result, const T *input, size_t n, dim3 block_dim = (256)){
     dim3 grid_dim = (n + block_dim.x - 1 ) / block_dim.x;
-    atomic_sum_kernel<<<grid_dim, block_dim>>>(result,input,n);
+    // atomic_sum_kernel<<<grid_dim, block_dim>>>(result,input,n);
+    reduce_warp_sum_kernel_old<<<grid_dim, block_dim>>>(result,input,n);
     CUDA_CHECK(cudaGetLastError());
 }
 
