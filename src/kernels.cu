@@ -2,7 +2,7 @@
 #include <cuda_fp16.h>
 
 #include "../tester/utils.h"
-
+#include "trace/trace.cuh"
 /**
  * @brief Computes the trace of a matrix.
  *
@@ -20,7 +20,27 @@
 template <typename T>
 T trace(const std::vector<T>& h_input, size_t rows, size_t cols) {
   // TODO: Implement the trace function
-  return T(-1);
+  size_t SIZE = rows < cols ? rows : cols;
+  size_t SIZE_BYTES = sizeof(T) * rows * cols;
+  T result_h = T(0);
+
+  T *result_d, *input_d;
+  RUNTIME_CHECK(cudaMalloc(&input_d, SIZE_BYTES));
+  RUNTIME_CHECK(cudaMalloc(&result_d, sizeof(T)));
+
+  RUNTIME_CHECK(cudaMemcpy(input_d,h_input.data(),SIZE_BYTES,cudaMemcpyHostToDevice));
+  RUNTIME_CHECK(cudaMemcpy(result_d,&result_h,sizeof(T),cudaMemcpyHostToDevice));
+
+  trace(result_d,input_d,SIZE, cols);
+  RUNTIME_CHECK(cudaDeviceSynchronize());
+
+  RUNTIME_CHECK(cudaMemcpy(&result_h,result_d, sizeof(T), cudaMemcpyDeviceToHost));
+
+  // std::cout<< result_h << std::endl;
+
+  RUNTIME_CHECK(cudaFree(input_d));
+  RUNTIME_CHECK(cudaFree(result_d));
+  return result_h;
 }
 
 /**
